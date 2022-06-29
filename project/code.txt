@@ -1,0 +1,263 @@
+if (sim_call_type==sim.syscb_cleanup) then
+end
+
+enableIk=function(enable)
+    if enable then
+        sim.setObjectMatrix(ikTarget,-1,sim.getObjectMatrix(ikTip,-1))
+        for i=1,#jointHandles,1 do
+            sim.setJointMode(jointHandles[i],sim.jointmode_ik,1)
+        end
+
+        sim.setExplicitHandling(ikGroupHandle,0)
+    else
+        sim.setExplicitHandling(ikGroupHandle,1)
+        for i=1,#jointHandles,1 do
+            sim.setJointMode(jointHandles[i],sim.jointmode_force,0)
+        end
+    end
+end
+
+setGripperData=function(open,velocity,force)
+    if not velocity then
+        velocity=0.11
+    end
+    if not force then
+        force=20
+    end
+    if not open then
+        velocity=-velocity
+    end
+    local data=sim.packFloatTable({velocity,force})
+    sim.setStringSignal(modelName..'_rg2GripperData',data)
+end
+
+function sysCall_threadmain()
+    -- Initialize some values:
+    jointHandles={-1,-1,-1,-1,-1,-1}
+    for i=1,6,1 do
+        jointHandles[i]=sim.getObjectHandle('UR5_joint'..i)
+    end
+    ikGroupHandle=sim.getIkGroupHandle('UR5')
+    ikTip=sim.getObjectHandle('UR5_ikTip')
+    ikTarget=sim.getObjectHandle('UR5_ikTarget')
+    modelBase=sim.getObjectAssociatedWithScript(sim.handle_self)
+    modelName=sim.getObjectName(modelBase)
+
+    -- Set-up some of the RML vectors:
+    vel=90
+    accel=20
+    jerk=40
+    currentVel={0,0,0,0,0,0,0}
+    currentAccel={0,0,0,0,0,0,0}
+    maxVel={vel*math.pi/180,vel*math.pi/180,vel*math.pi/180,vel*math.pi/180,vel*math.pi/180,vel*math.pi/180}
+    maxAccel={accel*math.pi/180,accel*math.pi/180,accel*math.pi/180,accel*math.pi/180,accel*math.pi/180,accel*math.pi/180}
+    maxJerk={jerk*math.pi/180,jerk*math.pi/180,jerk*math.pi/180,jerk*math.pi/180,jerk*math.pi/180,jerk*math.pi/180}
+    targetVel={0,0,0,0,0,0}
+
+    ikMaxVel={0.4,0.4,0.4,1.8}
+    ikMaxAccel={0.8,0.8,0.8,0.9}
+    ikMaxJerk={0.6,0.6,0.6,0.8}
+
+    initialConfig={0,0,0,0,0,0}
+    pickConfig={-70.1*math.pi/180,18.85*math.pi/180,93.18*math.pi/180,68.02*math.pi/180,109.9*math.pi/180,90*math.pi/180}
+
+
+
+--obtain image RGB information from vision sensor
+sensor=sim.getObjectHandle("Vision_sensor")
+rgb_list=sim.getVisionSensorImage(sensor,0,0,0,0,0)
+
+glass_num=3
+
+--detect destination
+
+count=0
+xsum=0
+ysum=0
+
+for n=1,256*256,1 do
+    m=3*n-2
+    if ((rgb_list[m]>0.94)and(rgb_list[m+1]>0.94)and(rgb_list[m+2]<0.9)) then
+        xc=n%256
+        yc=(n-xc)/256+1
+        xr=1-xc/128
+        yr=1-yc/128
+        if ((xr>0.4)or(xr<-0.5)or(yr>0.4)or(yr<-0.4)) then
+            xsum=xsum+xr
+            ysum=ysum+yr
+            count=count+1
+        end
+    end
+end
+xdes=xsum/count
+ydes=ysum/count
+print(xdes)
+print(ydes)
+
+--detect wall
+
+count=0
+xsum=0
+ysum=0
+
+for n=1,256*256,1 do
+    m=3*n-2
+    if ((rgb_list[m]>0.94)and(rgb_list[m+1]<0.9)and(rgb_list[m+2]>0.94)) then
+        xc=n%256
+        yc=(n-xc)/256+1
+        xr=1-xc/128
+        yr=1-yc/128
+        if ((xr>0.25)or(xr<-0.5)or(yr>0.25)or(yr<-0.25)) then
+            xsum=xsum+xr
+            ysum=ysum+yr
+            count=count+1
+        end
+    end
+end
+xwallcen=xsum/count
+ywallcen=ysum/count
+print(xwallcen)
+print(ywallcen)
+
+for loop=1,glass_num,1 do
+
+    --detect cup
+    
+    count=0
+    xsum=0
+    ysum=0
+    
+    if (loop==1) then
+        col=0
+        col_2=1
+        col_3=2
+    end
+    if (loop==2) then
+        col=1
+        col_2=-1
+        col_3=1
+    end
+    if (loop==3) then
+        col=2
+        col_2=-2
+        col_3=-1
+    end
+    
+    for n=1,256*256,1 do
+        m=3*n-2+col
+        if ((rgb_list[m]>0.94)and(rgb_list[m+col_2]<0.9)and(rgb_list[m+col_3]<0.9)) then
+            xc=n%256
+            yc=(n-xc)/256+1
+            xr=1-xc/128
+            yr=1-yc/128
+            if ((xr>0.25)or(xr<-0.5)or(yr>0.25)or(yr<-0.25)) then
+                xsum=xsum+xr
+                ysum=ysum+yr
+                count=count+1
+            end
+        end
+    end
+    xcup=xsum/count
+    ycup=ysum/count
+    
+    
+    if (sim_call_type==sim.syscb_actuation) then
+    
+    end
+    
+    
+    if (sim_call_type==sim.syscb_sensing) then
+    
+        -- Put your main SENSING code here
+        result, t0, t1 = sim.readVisionSensor(sensor) 
+        if (t1) then -- in t1 we should have the blob information if the camera was set-up correctly
+            blobCount=t1[1]
+            dataSizePerBlob=t1[2]
+            print(tostring(blobCount).."bolobs")
+    
+            -- Now we go through all blobs:
+            for i=1,blobCount,1 do
+                blobSize=t1[2+(i-1)*dataSizePerBlob+1]
+                blobOrientation=t1[2+(i-1)*dataSizePerBlob+2] --This value is given in radians and represents the relative orientation of the blob's bounding box
+                blobPos={t1[2+(i-1)*dataSizePerBlob+3],t1[2+(i-1)*dataSizePerBlob+4]} --{position x, position y}
+                blobBoxDimensions={t1[2+(i-1)*dataSizePerBlob+5],t1[2+(i-1)*dataSizePerBlob+6]} --{width, height}
+                
+                print("blob"..tostring(i)..":  position:{"..tostring(blobPos[1])..","..tostring(blobPos[2]).."} orientation:"..tostring(blobOrientation*180/math.pi)) 
+            end
+        end
+    
+    end
+    
+    --
+    
+    --
+        pickpos={xcup,ycup,0.0617}          -- position of cup we got
+        droppos={xdes,ydes,0.062+loop*0.08-0.08}         -- drop position we got
+        wallcenter={xwallcen,ywallcen,0.1}          -- position of wall center we got
+    
+        enableIk(false)
+        setGripperData(true)
+        sim.setInt32Parameter(sim.intparam_current_page,0)
+    
+    
+            if (sim.getSimulationState()~=sim.simulation_advancing_abouttostop and loop==1) then
+                sim.rmlMoveToJointPositions(jointHandles,-1,currentVel,currentAccel,maxVel,maxAccel,maxJerk,pickConfig,targetVel)    
+            end
+    
+            if sim.getSimulationState()~=sim.simulation_advancing_abouttostop then
+                enableIk(true)
+                sim.setInt32Parameter(sim.intparam_current_page,1)
+            
+    
+                pos=sim.getObjectPosition(ikTip,-1)
+                quat=sim.getObjectQuaternion(ikTip,-1)
+                sim.rmlMoveToPosition(ikTarget,-1,-1,nil,nil,ikMaxVel,ikMaxAccel,ikMaxJerk,{pickpos[1]-0.1,pickpos[2],pickpos[3]+0.08},quat,nil)
+                -- move to position above the cup {0.67,0.29,0.0617+0.08}
+                sim.rmlMoveToPosition(ikTarget,-1,-1,nil,nil,ikMaxVel,ikMaxAccel,ikMaxJerk,{pickpos[1]-0.1,pickpos[2],pickpos[3]},quat,nil)
+                -- move to position near the cup, initial: pos[1],pos[2]+0.015,0.0617  {0.67,0.29,0.0617}
+                sim.rmlMoveToPosition(ikTarget,-1,-1,nil,nil,ikMaxVel,ikMaxAccel,ikMaxJerk,{pickpos[1]+0.01,pickpos[2],pickpos[3]},quat,nil)
+                -- move to postion of the cup, initial :pos[1]+0.10,pos[2]+0.015,0.0617  {0.77+0.01,0.29,0.0617}
+            end
+    
+            if sim.getSimulationState()~=sim.simulation_advancing_abouttostop then
+                setGripperData(false)
+                -- catch the cup
+                sim.wait(0.5)
+            end
+    
+            if sim.getSimulationState()~=sim.simulation_advancing_abouttostop then
+                sim.rmlMoveToPosition(ikTarget,-1,-1,nil,nil,ikMaxVel,ikMaxAccel,ikMaxJerk,{wallcenter[1],wallcenter[2],0.35},quat,nil)
+                -- move to postion above the wall initial(pos[1],pos[2]-0.2,pos[3]+0.2
+            end
+    
+            if sim.getSimulationState()~=sim.simulation_advancing_abouttostop then
+                sim.setInt32Parameter(sim.intparam_current_page,2)
+                enableIk(true)
+                pos=sim.getObjectPosition(ikTip,-1)
+                quat=sim.getObjectQuaternion(ikTip,-1)
+                sim.rmlMoveToPosition(ikTarget,-1,-1,nil,nil,ikMaxVel,ikMaxAccel,ikMaxJerk,{droppos[1],droppos[2],0.25},quat,nil)
+                --move to postion above drop position {0.275,-0.55,0.25}
+                sim.rmlMoveToPosition(ikTarget,-1,-1,nil,nil,ikMaxVel,ikMaxAccel,ikMaxJerk,droppos,quat,nil)
+                -- move to drop position {0.275,-0.55,0.062}
+            end
+    
+            if sim.getSimulationState()~=sim.simulation_advancing_abouttostop then
+                setGripperData(true)
+                -- drop the cup
+                sim.wait(0.8)
+            end
+    
+            if sim.getSimulationState()~=sim.simulation_advancing_abouttostop then
+                sim.rmlMoveToPosition(ikTarget,-1,-1,nil,nil,ikMaxVel,ikMaxAccel,ikMaxJerk,{droppos[1],droppos[2],0.25+loop*0.01},quat,nil)
+            end
+    
+            if sim.getSimulationState()~=sim.simulation_advancing_abouttostop then
+                enableIk(false)
+    
+                sim.setInt32Parameter(sim.intparam_current_page,0)
+    
+            end
+end
+    sim.rmlMoveToJointPositions(jointHandles,-1,currentVel,currentAccel,maxVel,maxAccel,maxJerk,initialConfig,targetVel)
+    sim.stopSimulation()
+end
